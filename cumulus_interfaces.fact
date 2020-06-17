@@ -1,0 +1,256 @@
+#!/usr/bin/python
+
+import os
+import sys
+import json
+import re
+import itertools
+
+
+class PortInfo():
+ def __init__(self):
+  self.switch_name = ""
+  self.port_name = ""
+  self.port_alias = ""
+  self.port_profile = ""
+  self.port_profile_valid = 0
+  self.port_iscustom = 0
+  self.port_isaccess = 0
+  self.port_accessvlan = 0
+  self.port_istrunk = 0
+  self.port_trunkedvlans = []
+  self.port_trunkedvlans_str = ""
+  self.port_bondslaves = []
+  self.port_isbond = 0
+  self.port_speed = 0
+  self.port_adminmtu = 0
+  self.port_clagid = 0
+  self.port_admindn = 0
+  self.port_isslave = 0
+  self.port_bondid = 0
+  self.port_description = ""
+
+
+def parse_interface_config():
+
+ port_list = []
+ all_ports_config = []
+ active_vlans = []
+
+ try:
+  interface_file = open("/etc/network/interfaces","r")
+ except:
+  print "Cannot open /etc/network/interfaces"
+  sys.exit()
+
+ config = interface_file.readlines()
+
+ for line in config:
+    try:
+     if(re.match("^iface.*",line)):
+       port_name = line.split()[1]
+       if(not re.match(".*[\(,].*",port_name)):
+        port_list.append(port_name)
+    except:
+     pass
+
+ for port in port_list:
+    new_port = CL_get_port_info(port,config)
+    all_ports_config.append(new_port)
+
+ for port in all_ports_config:
+   for slave_port in port.port_bondslaves:
+     for maybe_slave in all_ports_config:
+       nameregex = "^"+slave_port+"$"
+       if(re.search(nameregex,maybe_slave.port_name,re.IGNORECASE)):
+        maybe_slave.port_isslave = 1
+
+ for port in all_ports_config:
+   if(re.match("^bridge$",port.port_name)):
+    active_vlans = port.port_trunkedvlans[:]
+
+ return all_ports_config,active_vlans
+
+
+def CL_get_port_info(port,config):
+
+  port_found = 0
+  port_start = 0
+  portconfig = []
+  portregex = "^"+port+"$"
+
+  for line in config:
+   if(re.match("^iface.*",line)):
+    port_name = line.split()[1]
+    if(re.search(portregex,port_name,re.IGNORECASE)):
+     port_found = 1
+     port_start = 1
+    else:
+     port_start = 0
+
+   if(port_start):
+    portconfig.append(line)
+
+  if port_found:
+     PortInfo = CL_parse_port_info(portconfig)
+     if(PortInfo.port_name == ""): # port has no config at all
+      PortInfo.port_name = port
+     #print (response.json)
+
+  if not port_found:
+    verbose_print("port "+port+" not found in config")
+    return -1
+  return PortInfo
+
+
+def CL_parse_port_info(port_info):
+  portinfo = PortInfo()
+  for line in port_info:
+   if(re.match("^iface.*$",line)):
+    portinfo.port_name = line.split(" ")[1]
+   if(re.match("^\s+alias.*$",line)):
+    portinfo.port_description = ""
+    fc = 0
+    for alias in line.strip(" ").split(" "):
+     fc += 1
+     if(fc > 1):
+      portinfo.port_description += " "+alias
+      if(fc==2):
+       if(re.match("^PP_.*$",alias)):                  # port profile name in interface alias/description _must_ start with "PP_" string
+        portinfo.port_profile = alias
+   if(re.match("^\s+bond-slaves.*$",line)):
+    portinfo.port_isbond = 1
+    portinfo.port_bondslaves = []
+    fc = 0
+    for slave in line.strip(" ").split(" "):
+     fc += 1
+     if(fc > 1):
+      portinfo.port_bondslaves.append(slave)
+   if(re.match("^\s+bridge-vids.*$",line)):
+    portinfo.port_istrunk = 1
+    portinfo.port_trunkedvlans = []
+    fc = 0
+    tokens = line.strip(" ").split(" ")
+    for vlanid in tokens:
+     fc += 1
+     if(fc > 1):
+      portinfo.port_trunkedvlans.append(vlanid)
+      portinfo.port_trunkedvlans_str += str(vlanid)
+      if(fc < len(tokens)):
+       portinfo.port_trunkedvlans_str += ","
+    portinfo.port_trunkedvlans = SW_convert_vlan_string_to_list(SW_convert_vlan_range_to_string(SW_convert_vlan_list_to_string(portinfo.port_trunkedvlans)))
+   if(re.match("^\s+clag-id.*$",line)):
+    portinfo.port_clagid = int(line.strip(" ").split(" ")[1])
+   if(re.match("^\s+bridge-access.*$",line)):
+    portinfo.port_isaccess = 1
+    portinfo.port_accessvlan = int(line.strip(" ").split(" ")[1])
+   if(re.match("^\s+link-speed.*$",line)):
+    portinfo.port_speed = int(line.strip(" ").split(" ")[1])
+
+  return portinfo
+
+
+def SW_convert_vlan_list_to_int(vlans):
+ integer_vlan_list = []
+ for vlan in vlans:
+  try:
+   intvlan = int(vlan)
+   integer_vlan_list.append(intvlan)
+  except:
+   pass
+ return sorted(integer_vlan_list)
+
+
+def SW_convert_vlan_string_to_int(vlan_string):
+ vlans = vlan_string.split(",")
+ integer_vlan_list = []
+ for vlan in vlans:
+  try:
+   intvlan = int(vlan)
+   integer_vlan_list.append(intvlan)
+  except:
+   pass
+ return integer_vlan_list
+
+
+def SW_convert_string_list_to_string(string_list):
+ first = 1
+ cstr = ""
+ for element in string_list:
+  if(first):
+   cstr = str(element)
+   first = 0
+  else:
+   cstr = cstr+","+str(element)
+ return cstr
+
+
+def SW_convert_vlan_string_to_list(vlan_string):
+ vlans = vlan_string.split(",")
+ vlan_list = []
+ for vlan in vlans:
+  vlan_list.append(str(vlan))
+ return vlan_list
+
+
+def SW_convert_vlan_list_to_string(vlans):
+ first = 1
+ vlan_str = ""
+ for vlan in sorted(vlans):
+  if(first):
+   vlan_str = str(vlan)
+   first = 0
+  else:
+   vlan_str = vlan_str + ","+str(vlan)
+ return vlan_str
+
+
+def SW_convert_int_vlan_list_to_list(integer_vlans):
+ str_vlan_list = []
+ for vlan in integer_vlans:
+   str_vlan_list.append(str(vlan))
+ return str_vlan_list
+
+
+def SW_convert_vlan_range_to_string(u_ranged_vlan_string):
+ vlan_list = []
+ ranged_vlan_string = str(u_ranged_vlan_string)
+ vlans = ranged_vlan_string.split(",")
+ for ranged_vlan in vlans:
+  if(re.match(".*-.*",ranged_vlan)):
+   vrange = ranged_vlan.split("-")
+   lower_range = int(vrange[0])
+   upper_range = int(vrange[1])
+   for v in range(lower_range, upper_range+1):
+     vlan_list.append(str(v))
+  else:
+    vlan_list.append(ranged_vlan)
+ return SW_convert_vlan_list_to_string(sorted(vlan_list))
+
+
+def SW_convert_vlan_list_to_range(vlan_list):
+ vlans = vlan_list.split(",")
+ integer_vlans = SW_convert_vlan_list_to_int(vlans)
+ ranged_vlan_str = ""
+ # black magic fuckery from stack overflow:
+ G=(list(x) for _,x in groupby(integer_vlans, lambda x,c=count(): next(c)-x))
+ ranged_vlan_str = ",".join("-".join(map(str,(g[0],g[-1])[:len(g)])) for g in G)
+ return ranged_vlan_str
+
+
+# main program
+
+ports,vlans = parse_interface_config()
+
+i = 0
+
+print "["
+for port in ports:
+ json_string = json.dumps(port.__dict__)
+ print json_string
+ i = i + 1
+ if i != len(ports):
+  print ","
+print "]"
+
+# end
