@@ -1,5 +1,5 @@
 # ansible_cumulus_interfaces
-cumlus_interfaces Ansible custom fact for Cumulus Linux
+cumulus_interfaces Ansible custom fact for Cumulus Linux
 
 Ansible custom fact for ethernet switches running Cumulus Linux. This fact will generate an array of information related to interface configuration, which is not gathered by standard Ansible facts.
 
