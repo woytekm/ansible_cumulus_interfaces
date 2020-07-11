@@ -232,7 +232,6 @@ def SW_convert_vlan_list_to_range(vlan_list):
  vlans = vlan_list.split(",")
  integer_vlans = SW_convert_vlan_list_to_int(vlans)
  ranged_vlan_str = ""
- # black magic fuckery from stack overflow:
  G=(list(x) for _,x in groupby(integer_vlans, lambda x,c=count(): next(c)-x))
  ranged_vlan_str = ",".join("-".join(map(str,(g[0],g[-1])[:len(g)])) for g in G)
  return ranged_vlan_str
